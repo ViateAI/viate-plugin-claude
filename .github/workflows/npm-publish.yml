@@ -36,4 +36,4 @@ jobs:
           node-version: 24
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: npm stage publish --access public
+      - run: npm publish --access public
