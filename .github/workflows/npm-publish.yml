@@ -36,4 +36,12 @@ jobs:
           node-version: 24
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Check OIDC
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "oidc=set"
+          else
+            echo "oidc=missing"
+            exit 1
+          fi
       - run: npm publish --access public
