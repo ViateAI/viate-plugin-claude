@@ -33,20 +33,23 @@ Chat tools, tool results, text, and image URLs are translated. `previous_respons
 
 ## Install
 
-From npm, after a release is published:
+This package is not published to npm. Clone the repository, compile it, and install that directory. `viate.entry` is `dist/index.js`, and `dist/` is not in git. The installer runs with `ignore-scripts=true`, so it will not compile the package for you.
+
+Node.js >= 24. pnpm 12.16.1, pinned by `packageManager`.
 
 ```bash
-viate plugin add @viateai/plugin-claude
+git clone https://github.com/ViateAI/viate-plugin-claude.git
+cd viate-plugin-claude
+pnpm install
+pnpm build
+viate plugin add "$PWD"
 ```
 
-From a tarball:
+`$PWD` is passed to `pnpm add` by the `viate` process. From the admin plugin source field, use the same directory as an absolute path that process can read.
 
-```bash
-npm pack
-viate plugin add ./<tarball>.tgz
-```
+`@viateai/sdk` is a peer of `1.0.1`; the gateway removes it at install and loads its own copy. `plugin add` stages a pending workspace. Restart the gateway to load it.
 
-`viate.entry` is `dist/index.js`. The published tarball contains the built `dist`. `@viateai/sdk` is a peer of `1.0.1`; the gateway removes it at install and loads its own copy.
+To install a newer checkout, pull, run `pnpm install` and `pnpm build` again, then `viate plugin add "$PWD"` again, and restart.
 
 Plugins run in-process. Install only packages you trust. See [Viate](https://github.com/ViateAI/viate).
 
