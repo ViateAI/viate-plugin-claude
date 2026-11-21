@@ -430,7 +430,7 @@ function openAIUsage(usage: Block | undefined): Record<string, unknown> | null {
     prompt_tokens: input + cacheRead + cacheWrite,
     completion_tokens: output,
     total_tokens: input + output + cacheRead + cacheWrite,
-    prompt_tokens_details: { cached_tokens: cacheRead },
+    prompt_tokens_details: { cached_tokens: cacheRead, cache_write_tokens: cacheWrite },
   };
 }
 
@@ -438,15 +438,15 @@ function mergeUsage(current: Record<string, unknown> | null, next: Record<string
   if (!current) return next;
   const prompt = Math.max(count(current.prompt_tokens), count(next.prompt_tokens));
   const completion = Math.max(count(current.completion_tokens), count(next.completion_tokens));
-  const cached = Math.max(
-    count(record(current.prompt_tokens_details)?.cached_tokens),
-    count(record(next.prompt_tokens_details)?.cached_tokens),
-  );
+  const currentDetails = record(current.prompt_tokens_details);
+  const nextDetails = record(next.prompt_tokens_details);
+  const cached = Math.max(count(currentDetails?.cached_tokens), count(nextDetails?.cached_tokens));
+  const cacheWrite = Math.max(count(currentDetails?.cache_write_tokens), count(nextDetails?.cache_write_tokens));
   return {
     prompt_tokens: prompt,
     completion_tokens: completion,
     total_tokens: prompt + completion,
-    prompt_tokens_details: { cached_tokens: cached },
+    prompt_tokens_details: { cached_tokens: cached, cache_write_tokens: cacheWrite },
   };
 }
 

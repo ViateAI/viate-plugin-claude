@@ -15,6 +15,7 @@ import {
   type OAuthStartResult,
   type PluginContext,
   type ProviderConnection,
+  type RequestUsage,
   type SubscriptionInput,
   type SubscriptionResult,
   type SubscriptionUsage,
@@ -318,7 +319,7 @@ export async function chatCompletions(request: JsonPostRequest, connection: Prov
       status: upstream.status,
       headers: { "content-type": "text/event-stream" },
       body: streamAnthropicToOpenAI(upstream.body, built.model),
-      parseUsage: parseOpenAIChatUsage,
+      parseUsage: parseChatUsage,
     };
   }
   const text = await upstream.text();
@@ -336,7 +337,7 @@ export async function chatCompletions(request: JsonPostRequest, connection: Prov
     status: 200,
     headers: { "content-type": "application/json" },
     body: jsonBody(toOpenAIChatCompletion(built.model, payload)),
-    parseUsage: parseOpenAIChatUsage,
+    parseUsage: parseChatUsage,
   };
 }
 
@@ -351,7 +352,7 @@ export async function responses(request: JsonPostRequest, connection: ProviderCo
       ...result,
       headers: { "content-type": "text/event-stream" },
       body: streamResponses(result.body, model),
-      parseUsage: parseOpenAIResponsesUsage,
+      parseUsage: parseResponsesUsage,
     };
   }
   const completion: unknown = JSON.parse(await new Response(result.body).text());
@@ -359,7 +360,7 @@ export async function responses(request: JsonPostRequest, connection: ProviderCo
     status: 200,
     headers: { "content-type": "application/json" },
     body: jsonBody(chatCompletionToResponse(completion)),
-    parseUsage: parseOpenAIResponsesUsage,
+    parseUsage: parseResponsesUsage,
   };
 }
 
@@ -628,6 +629,37 @@ function isAbortError(error: unknown): boolean {
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function parseChatUsage(frames: unknown[]): RequestUsage | null {
+  const parsed = parseOpenAIChatUsage(frames);
+  if (!parsed) return null;
+  return { ...parsed, cacheWriteTokens: cacheWriteTokens(frames, "prompt_tokens_details") };
+}
+
+function parseResponsesUsage(frames: unknown[]): RequestUsage | null {
+  const parsed = parseOpenAIResponsesUsage(frames);
+  if (!parsed) return null;
+  return { ...parsed, cacheWriteTokens: cacheWriteTokens(frames, "input_tokens_details") };
+}
+
+function cacheWriteTokens(frames: unknown[], detailsKey: "prompt_tokens_details" | "input_tokens_details"): number {
+  const usage = lastUsage(frames);
+  const details = record(usage?.[detailsKey]);
+  const value = details?.cache_write_tokens;
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function lastUsage(frames: unknown[]): Record<string, unknown> | undefined {
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    const frame = record(frames[index]);
+    if (!frame) continue;
+    const direct = record(frame.usage);
+    if (direct) return direct;
+    const nested = record(record(frame.response)?.usage);
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

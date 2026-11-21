@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { parseOpenAIChatUsage, silentPluginLogger, type ProviderConnection, type ProviderHandler } from "@viateai/sdk";
+import { silentPluginLogger, type ProviderConnection, type ProviderHandler } from "@viateai/sdk";
 import {
   chatCompletions,
   exchangeOAuth,
@@ -202,7 +202,6 @@ describe("claude plugin", () => {
       headers: { "anthropic-beta": "caller-beta" },
     }, connection(credentials));
     assert.equal(result.status, 200);
-    assert.equal(result.parseUsage, parseOpenAIChatUsage);
     assert.equal(seen?.url, "https://api.anthropic.com/v1/messages?beta=true");
     assert.equal(seen?.headers.get("authorization"), "Bearer access-token");
     assert.equal(seen?.headers.get("user-agent"), "claude-cli/2.1.321 (external, cli)");
@@ -262,6 +261,88 @@ describe("claude plugin", () => {
     assert.equal(payload.usage?.input_tokens, 2);
   });
 
+  it("reports cache creation on chat usage and parseUsage", async () => {
+    globalThis.fetch = async () => Response.json({
+      id: "msg_1",
+      type: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "Hi" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 3, output_tokens: 1, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 },
+    });
+    const result = await chatCompletions({
+      body: { model: "claude-sonnet-4-6", messages: [{ role: "user", content: "Hello" }] },
+      headers: {},
+    }, connection(stored()));
+    const completion = JSON.parse(await readStream(result.body)) as {
+      usage: { prompt_tokens: number; prompt_tokens_details: { cached_tokens: number; cache_write_tokens: number } };
+    };
+    assert.equal(completion.usage.prompt_tokens, 9);
+    assert.equal(completion.usage.prompt_tokens_details.cached_tokens, 2);
+    assert.equal(completion.usage.prompt_tokens_details.cache_write_tokens, 4);
+    assert.deepEqual(result.parseUsage?.([completion]), {
+      inputTokens: 9,
+      outputTokens: 1,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 4,
+    });
+  });
+
+  it("reports cache creation on responses usage and parseUsage", async () => {
+    globalThis.fetch = async () => Response.json({
+      id: "msg_1",
+      type: "message",
+      content: [{ type: "text", text: "Hi" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 3, output_tokens: 1, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 },
+    });
+    const result = await responses({
+      body: { model: "claude-sonnet-4-6", input: "Hello" },
+      headers: {},
+    }, connection(stored()));
+    const payload = JSON.parse(await readStream(result.body)) as {
+      usage?: { input_tokens?: number; input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } };
+    };
+    assert.equal(payload.usage?.input_tokens, 9);
+    assert.equal(payload.usage?.input_tokens_details?.cache_write_tokens, 4);
+    assert.deepEqual(result.parseUsage?.([payload]), {
+      inputTokens: 9,
+      outputTokens: 1,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 4,
+    });
+  });
+
+  it("keeps message_start cache writes after a message_delta that only has output tokens", async () => {
+    globalThis.fetch = async () => new Response([
+      `event: message_start\ndata: ${JSON.stringify({
+        type: "message_start",
+        message: {
+          id: "msg_1",
+          usage: { input_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 4 },
+        },
+      })}\n\n`,
+      `event: message_delta\ndata: ${JSON.stringify({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 1 },
+      })}\n\n`,
+    ].join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
+    const result = await chatCompletions({
+      body: { model: "claude-sonnet-4-6", stream: true, messages: [{ role: "user", content: "Hello" }] },
+      headers: {},
+    }, connection(stored()));
+    const frames = sseDataFrames(await readStream(result.body));
+    const cacheWrite = frames.map(frameCacheWrite).findLast((value) => value !== undefined);
+    assert.equal(cacheWrite, 4);
+    assert.deepEqual(result.parseUsage?.(frames), {
+      inputTokens: 9,
+      outputTokens: 1,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 4,
+    });
+  });
+
   it("rejects responses that depend on stored state", async () => {
     await assert.rejects(
       responses({ body: { model: "claude-sonnet-4-6", previous_response_id: "resp_1", input: "Hi" }, headers: {} }, connection(stored())),
@@ -298,4 +379,27 @@ function connection(credentials: unknown): ProviderConnection {
 async function readStream(body: ReadableStream<Uint8Array> | null): Promise<string> {
   assert.ok(body);
   return Buffer.from(await new Response(body).arrayBuffer()).toString("utf8");
+}
+
+function sseDataFrames(text: string): unknown[] {
+  const frames: unknown[] = [];
+  for (const part of text.split(/\r?\n\r?\n/)) {
+    const data = part
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n");
+    if (!data || data === "[DONE]") continue;
+    frames.push(JSON.parse(data) as unknown);
+  }
+  return frames;
+}
+
+function frameCacheWrite(frame: unknown): number | undefined {
+  if (!frame || typeof frame !== "object" || !("usage" in frame)) return undefined;
+  const usage = frame.usage;
+  if (!usage || typeof usage !== "object" || !("prompt_tokens_details" in usage)) return undefined;
+  const details = usage.prompt_tokens_details;
+  if (!details || typeof details !== "object" || !("cache_write_tokens" in details)) return undefined;
+  return typeof details.cache_write_tokens === "number" ? details.cache_write_tokens : undefined;
 }

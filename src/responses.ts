@@ -338,12 +338,14 @@ function responsesUsage(usage: Record<string, unknown> | undefined): Record<stri
   if (!usage) return undefined;
   const input = count(usage.prompt_tokens);
   const output = count(usage.completion_tokens);
-  const cached = count(record(usage.prompt_tokens_details)?.cached_tokens);
+  const details = record(usage.prompt_tokens_details);
+  const cached = count(details?.cached_tokens);
+  const cacheWrite = count(details?.cache_write_tokens);
   return {
     input_tokens: input,
     output_tokens: output,
     total_tokens: count(usage.total_tokens) || input + output,
-    input_tokens_details: { cached_tokens: cached },
+    input_tokens_details: { cached_tokens: cached, cache_write_tokens: cacheWrite },
   };
 }
 
